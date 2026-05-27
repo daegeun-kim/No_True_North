@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unfixed Earth</title>
+  <link rel="stylesheet" href="styles/style.css" />
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Main visualization canvas -->
+  <div id="visualization">
+    <canvas id="map-canvas"></canvas>
+
+    <div id="instruction">
+      Click on the map to set the new North Pole
+    </div>
+
+    <div id="scroll-hint">
+      ← Scroll or drag to shift the map seam →
+    </div>
+
+    <div id="loading-overlay">
+      <span class="loading-text">Loading map data…</span>
+    </div>
+  </div>
+
+  <!-- Control panel -->
+  <div id="control-panel">
+
+    <div class="panel-header">
+      <div class="panel-title">Unfixed Earth</div>
+      <div class="panel-subtitle">Redefine the pole. Regenerate the map.</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Projection selector -->
+    <div class="control-group">
+      <div class="ctrl-label">Projection</div>
+      <div class="select-wrapper">
+        <select id="projection-select">
+          <option value="equirectangular">Equirectangular</option>
+          <option value="mercator">Mercator</option>
+          <option value="robinson">Robinson</option>
+          <option value="lambertConformalConic">Lambert Conformal Conic</option>
+          <option value="azimuthal">Azimuthal Equidistant</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Graticule toggle -->
+    <div class="control-group" id="grat-toggle-group">
+      <div class="ctrl-label">Graticule</div>
+      <div class="seg-control">
+        <button class="seg-btn" id="grat-redefined">Redefined</button>
+        <button class="seg-btn" id="grat-original">Original</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Pole readout -->
+    <div class="control-group">
+      <div class="ctrl-label">Selected poles</div>
+      <div class="pole-block">
+        <div class="pole-row">
+          <div class="pole-name north">New North Pole N′</div>
+          <div class="pole-value" id="north-pole-display">—</div>
+        </div>
+        <div class="pole-row">
+          <div class="pole-name south">Derived South Pole S′</div>
+          <div class="pole-value" id="south-pole-display">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Actions -->
+    <div class="control-group">
+      <div class="ctrl-label">Controls</div>
+      <div class="btn-group">
+        <button id="reset-btn">Reset</button>
+        <button id="replay-btn" disabled>Replay Animation</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div id="status-line"></div>
+
+  </div>
+</div>
+
+<!-- ES module import map via esm.sh -->
+<script type="importmap">
+{
+  "imports": {
+    "d3":                "https://esm.sh/d3@7",
+    "d3-geo-projection": "https://esm.sh/d3-geo-projection@4",
+    "topojson-client":   "https://esm.sh/topojson-client@3"
+  }
+}
+</script>
+
+<script type="module" src="src/main.js"></script>
+
+</body>
+</html>
