@@ -10,7 +10,41 @@
 
 <div id="app">
 
-  <!-- Main visualization canvas -->
+  <!-- ── Left panel: diagram + pole info ────────────────────── -->
+  <div id="left-panel">
+
+    <div class="panel-header">
+      <div class="panel-title">How the Map is Made</div>
+      <div class="panel-subtitle">Projection surface changes with projection type</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Projection formation diagram — populated dynamically by diagram.js -->
+    <div id="projection-diagram"></div>
+
+    <div class="divider"></div>
+
+    <!-- Pole location info -->
+    <div class="control-group">
+      <div class="ctrl-label">New Poles</div>
+      <div class="pole-block">
+        <div class="pole-row">
+          <div class="pole-name north">New North Pole N′</div>
+          <div class="pole-value" id="north-pole-display">—</div>
+          <div class="pole-redef-note">Redefined coordinate: 90° N</div>
+        </div>
+        <div class="pole-row">
+          <div class="pole-name south">New South Pole S′</div>
+          <div class="pole-value" id="south-pole-display">—</div>
+          <div class="pole-redef-note">Redefined coordinate: 90° S</div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /#left-panel -->
+
+  <!-- ── Center: map canvas ─────────────────────────────────── -->
   <div id="visualization">
     <canvas id="map-canvas"></canvas>
 
@@ -27,7 +61,7 @@
     </div>
   </div>
 
-  <!-- Control panel -->
+  <!-- ── Right panel: controls ──────────────────────────────── -->
   <div id="control-panel">
 
     <div class="panel-header">
@@ -42,11 +76,26 @@
       <div class="ctrl-label">Projection</div>
       <div class="select-wrapper">
         <select id="projection-select">
-          <option value="equirectangular">Equirectangular</option>
-          <option value="mercator">Mercator</option>
-          <option value="robinson">Robinson</option>
-          <option value="lambertConformalConic">Lambert Conformal Conic</option>
-          <option value="azimuthal">Azimuthal Equidistant</option>
+          <optgroup label="Cylindrical">
+            <option value="equirectangular">Equirectangular</option>
+            <option value="mercator">Mercator</option>
+            <option value="gallPeters">Gall-Peters</option>
+            <option value="cylindricalEqualArea">Cylindrical Equal Area</option>
+          </optgroup>
+          <optgroup label="Pseudo-Cylindrical">
+            <option value="robinson">Robinson</option>
+            <option value="mollweide">Mollweide</option>
+          </optgroup>
+          <optgroup label="Conic">
+            <option value="lambertConformalConic">Lambert Conformal Conic</option>
+            <option value="albersEqualAreaConic">Albers Equal-Area Conic</option>
+          </optgroup>
+          <optgroup label="Azimuthal">
+            <option value="azimuthalEquidistant">Azimuthal Equidistant</option>
+            <option value="lambertAzimuthalEqualArea">Lambert Azimuthal Equal-Area</option>
+            <option value="orthographic">Orthographic</option>
+            <option value="peirceQuincuncial">Peirce Quincuncial</option>
+          </optgroup>
         </select>
       </div>
     </div>
@@ -54,28 +103,11 @@
     <div class="divider"></div>
 
     <!-- Graticule toggle -->
-    <div class="control-group" id="grat-toggle-group">
+    <div class="control-group">
       <div class="ctrl-label">Graticule</div>
       <div class="seg-control">
         <button class="seg-btn" id="grat-redefined">Redefined</button>
         <button class="seg-btn" id="grat-original">Original</button>
-      </div>
-    </div>
-
-    <div class="divider"></div>
-
-    <!-- Pole readout -->
-    <div class="control-group">
-      <div class="ctrl-label">Selected poles</div>
-      <div class="pole-block">
-        <div class="pole-row">
-          <div class="pole-name north">New North Pole N′</div>
-          <div class="pole-value" id="north-pole-display">—</div>
-        </div>
-        <div class="pole-row">
-          <div class="pole-name south">Derived South Pole S′</div>
-          <div class="pole-value" id="south-pole-display">—</div>
-        </div>
       </div>
     </div>
 
@@ -94,8 +126,9 @@
 
     <div id="status-line"></div>
 
-  </div>
-</div>
+  </div><!-- /#control-panel -->
+
+</div><!-- /#app -->
 
 <!-- ES module import map via esm.sh -->
 <script type="importmap">

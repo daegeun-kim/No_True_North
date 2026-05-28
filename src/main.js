@@ -11,6 +11,24 @@ import {
   inverseTransformPoint,
   transformGeoJSON,
 } from './transform.js';
+import { renderDiagram } from './diagram.js';
+
+// ── Projection family → diagram mapping ───────────────────────
+
+const PROJ_FAMILY = {
+  equirectangular:          'cylindrical',
+  mercator:                 'cylindrical',
+  robinson:                 'cylindrical',
+  gallPeters:               'cylindrical',
+  cylindricalEqualArea:     'cylindrical',
+  mollweide:                'cylindrical',
+  lambertConformalConic:    'conic',
+  albersEqualAreaConic:     'conic',
+  azimuthalEquidistant:     'azimuthal',
+  lambertAzimuthalEqualArea:'azimuthal',
+  orthographic:             'azimuthal',
+  peirceQuincuncial:        'azimuthal',
+};
 
 // ── Default coordinate system (original north pole = identity) ─
 
@@ -63,6 +81,7 @@ const gratOrigBtn    = document.getElementById('grat-original');
 const gratRedefBtn   = document.getElementById('grat-redefined');
 const statusLine     = document.getElementById('status-line');
 const loadingOverlay = document.getElementById('loading-overlay');
+const projDiagramEl  = document.getElementById('projection-diagram');
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -134,6 +153,16 @@ function updateGratUI() {
     gratRedefBtn.classList.add('active');
     gratOrigBtn.classList.remove('active');
   }
+}
+
+function updateProjDiagram() {
+  const family = PROJ_FAMILY[state.projType] || 'cylindrical';
+  renderDiagram(
+    projDiagramEl,
+    family,
+    state.customPole?.lon ?? null,
+    state.customPole?.lat ?? null,
+  );
 }
 
 // ── Animation ─────────────────────────────────────────────────
@@ -227,6 +256,7 @@ function handlePoleClick(redefinedLon, redefinedLat) {
   };
 
   updatePoleUI();
+  updateProjDiagram();
   if (state.transformedData) draw();
   setPhase('animating');
   setTimeout(runTransitionAnimation, 180);
@@ -245,6 +275,8 @@ function handleProjectionChange() {
   if (newType === state.projType) return;
   state.projType = newType;
   projCache.type = null;
+
+  updateProjDiagram();
 
   if (state.phase === 'projected') {
     if (!isCylindrical(newType)) state.scrollDeg = 0;
@@ -284,6 +316,7 @@ function handleReset() {
 
   updatePoleUI();
   updateGratUI();
+  updateProjDiagram();
   replayBtn.disabled = true;
   instruction.classList.remove('hidden');
   setStatus('');
@@ -325,6 +358,7 @@ async function init() {
 
   setPhase('projected');
   updateGratUI();
+  updateProjDiagram();
   redrawProjected();
 
   setupInteraction(canvas, () => activeProjection, state, {

@@ -1,13 +1,13 @@
 import * as d3 from 'd3';
 
-const OCEAN_COLOR     = '#0a1628';
-const LAND_COLOR      = '#1e4035';
-const BORDER_COLOR    = '#335e46';
-const GRATICULE_COLOR = '#1a3858';
+const OCEAN_COLOR     = '#616161';
+const LAND_COLOR      = '#a9b5a7';
+const BORDER_COLOR    = '#232323';
+const GRATICULE_COLOR = '#272727';
 const GRATICULE_ORIG  = '#3a5530';
-const SPHERE_STROKE   = '#1a3050';
-const NORTH_COLOR     = '#e05a5a';
-const SOUTH_COLOR     = '#5a9ae0';
+const SPHERE_STROKE   = '#282828';
+const NORTH_COLOR     = '#ea4646';
+const SOUTH_COLOR     = '#539eef';
 
 // Standard graticule in [λ', φ'] space.
 // Because the projection always receives pre-transformed coordinates, this

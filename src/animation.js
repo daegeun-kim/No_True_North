@@ -1,7 +1,7 @@
 import * as d3 from 'd3';
 
 export const ROTATION_DURATION    = 1200;
-export const MORPH_DURATION       = 800;
+export const MORPH_DURATION       = 1600;
 
 export function runAnim(duration, easing, onFrame, onDone) {
   let rafId = null;
