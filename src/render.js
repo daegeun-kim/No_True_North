@@ -1,5 +1,5 @@
 import * as d3 from 'd3';
-import { bivariateColor, DISTORTION_COLOR_CONFIG } from './distortion.js';
+import { bivariateColor, BIVARIATE_COLOR_CONFIG } from './distortion.js';
 
 const OCEAN_COLOR     = '#828587';
 const LAND_COLOR      = '#d9d9d9';
@@ -39,12 +39,12 @@ export function renderFrame(canvas, proj, data, state, distOpts) {
   if (data?.land) {
     ctx.beginPath();
     path(data.land);
-    ctx.fillStyle = distOpts?.active ? DISTORTION_COLOR_CONFIG.noDataColor : LAND_COLOR;
+    ctx.fillStyle = distOpts?.active ? BIVARIATE_COLOR_CONFIG.noDataColor : LAND_COLOR;
     ctx.fill();
   }
 
   if (distOpts?.active && distOpts.distortionMap?.size > 0 && data?.countries) {
-    drawCountryDistortionLayer(ctx, path, data.countries, distOpts.distortionMap, distOpts.sizeColor, distOpts.shapeColor);
+    drawCountryDistortionLayer(ctx, path, data.countries, distOpts.distortionMap);
   }
 
   drawGraticule(ctx, proj, state.graticuleMode || 'redefined', data?.gratOrig);
@@ -150,13 +150,13 @@ function drawMarkers(ctx, projection, state) {
   if (south) drawPoleMarker(ctx, projection, south[0], south[1], 'S′', SOUTH_COLOR);
 }
 
-function drawCountryDistortionLayer(ctx, path, countries, distortionMap, sizeHex, shapeHex) {
+function drawCountryDistortionLayer(ctx, path, countries, distortionMap) {
   ctx.save();
-  ctx.globalAlpha = DISTORTION_COLOR_CONFIG.countryOpacity;
+  ctx.globalAlpha = BIVARIATE_COLOR_CONFIG.countryOpacity;
   for (const feature of countries.features) {
     const dist = distortionMap.get(feature.id);
     if (!dist) continue;
-    const [cr, cg, cb] = bivariateColor(dist.sizeNorm, dist.shapeNorm, sizeHex, shapeHex);
+    const [cr, cg, cb] = bivariateColor(dist.sizeNorm, dist.shapeNorm);
     ctx.beginPath();
     path(feature);
     ctx.fillStyle = `rgb(${cr},${cg},${cb})`;

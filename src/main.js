@@ -18,6 +18,7 @@ import {
   searchDistortionPreset,
   bivariateColor,
   DISTORTION_NORMALIZATION_CONFIG,
+  BIVARIATE_COLOR_CONFIG,
 } from './distortion.js';
 
 // ── Seam preview style ────────────────────────────────────────
@@ -65,8 +66,6 @@ const state = {
   cancelAnim:            null,
   // Distortion compare mode
   distortionMode:        false,
-  sizeColor:             '#4488ff',
-  shapeColor:            '#ff4444',
   countrySamples:        null,
   distortionMap:         null,
 };
@@ -108,9 +107,6 @@ const statusLine           = document.getElementById('status-line');
 const loadingOverlay       = document.getElementById('loading-overlay');
 const projDiagramEl        = document.getElementById('projection-diagram');
 const distortionToggleBtn  = document.getElementById('distortion-toggle-btn');
-const distortionColorCtrl  = document.getElementById('distortion-color-controls');
-const sizeColorInput       = document.getElementById('size-color-input');
-const shapeColorInput      = document.getElementById('shape-color-input');
 const distortionLegendSect = document.getElementById('distortion-legend-section');
 const legendCanvas         = document.getElementById('legend-canvas');
 const presetBtns           = document.querySelectorAll('.preset-btn');
@@ -137,8 +133,6 @@ function draw() {
   const distOpts = state.distortionMode ? {
     active:        true,
     distortionMap: state.distortionMap,
-    sizeColor:     state.sizeColor,
-    shapeColor:    state.shapeColor,
   } : null;
   renderFrame(canvas, activeProjection, state.transformedData, state, distOpts);
 }
@@ -271,11 +265,13 @@ function handleSeamClick(lon) {
 // ── Distortion helpers ────────────────────────────────────────
 
 function computeDistortionMap() {
-  if (!state.countrySamples || !activeProjection || !state.coordinateSystem || !state.data) return;
+  if (!state.countrySamples || !state.coordinateSystem || !state.data || !canvasW || !canvasH) return;
+  const distProj = makeProjection(state.projType, canvasW, canvasH);
+  distProj.rotate([0, 0, 0]);
   state.distortionMap = computeCountryDistortions(
     state.data.countries,
     state.countrySamples,
-    activeProjection,
+    distProj,
     state.coordinateSystem,
   );
   updateLegend();
@@ -292,7 +288,7 @@ function updateLegend() {
     for (let xi = 0; xi < W; xi += CELL) {
       const s =  xi / (W - 1);
       const q = 1 - yi / (H - 1);
-      const [r, g, b] = bivariateColor(s, q, state.sizeColor, state.shapeColor);
+      const [r, g, b] = bivariateColor(s, q);
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.fillRect(xi, yi, CELL, CELL);
     }
@@ -313,15 +309,14 @@ function updateLegend() {
 
   const swatchSize  = document.getElementById('legend-swatch-size');
   const swatchShape = document.getElementById('legend-swatch-shape');
-  if (swatchSize)  swatchSize.style.background  = state.sizeColor;
-  if (swatchShape) swatchShape.style.background = state.shapeColor;
+  if (swatchSize)  swatchSize.style.background  = BIVARIATE_COLOR_CONFIG.highSizeLowShape;
+  if (swatchShape) swatchShape.style.background = BIVARIATE_COLOR_CONFIG.lowSizeHighShape;
 }
 
 function updateDistortionUI() {
   const active = state.distortionMode;
   distortionToggleBtn.textContent = active ? 'Hide Distortion Compare' : 'Show Distortion Compare';
   distortionToggleBtn.classList.toggle('active-toggle', active);
-  distortionColorCtrl.classList.toggle('distortion-hidden', !active);
   distortionLegendSect.classList.toggle('distortion-hidden', !active);
 }
 
@@ -607,15 +602,6 @@ async function init() {
   gratRedefBtn.addEventListener('click', () => handleGraticuleToggle('redefined'));
 
   distortionToggleBtn.addEventListener('click', handleDistortionToggle);
-
-  sizeColorInput.addEventListener('input', () => {
-    state.sizeColor = sizeColorInput.value;
-    if (state.distortionMode) { updateLegend(); draw(); }
-  });
-  shapeColorInput.addEventListener('input', () => {
-    state.shapeColor = shapeColorInput.value;
-    if (state.distortionMode) { updateLegend(); draw(); }
-  });
 
   presetBtns.forEach(btn => {
     btn.addEventListener('click', () => handleDistortionPreset(btn.dataset.key));

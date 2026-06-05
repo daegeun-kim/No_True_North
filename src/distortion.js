@@ -12,15 +12,18 @@ export const DISTORTION_NORMALIZATION_CONFIG = {
   shapeDistortionMax: 1.0,
 };
 
-// ── Color / transparency config ────────────────────────────────
+// ── Bivariate color / transparency config ──────────────────────
+// Four corner colors for bilinear interpolation.
 // Edit these values to adjust the visual appearance of distortion mode.
-export const DISTORTION_COLOR_CONFIG = {
-  sizeColor:      '#1692fe',
-  shapeColor:     '#dc2626',
-  lowColor:       '#ffffff',
-  borderColor:    '#111827',
-  countryOpacity: 0.9,
-  noDataColor:    '#d4d4d4',
+export const BIVARIATE_COLOR_CONFIG = {
+  lowSizeLowShape:   "#ffffff",
+  highSizeLowShape:  "#dc2626",
+  lowSizeHighShape:  "#2563eb",
+  highSizeHighShape: "#000000",
+  countryOpacity:    1,
+  borderColor:       "#111827",
+  borderOpacity:     1,
+  noDataColor:       "#d4d4d4",
 };
 
 const EPS = 0.35; // degrees for finite-difference Jacobian
@@ -36,19 +39,19 @@ export function hexToRgb(hex) {
 }
 
 // Bivariate 2×2 corner interpolation:
-//   (s=0, q=0) → neutral light
-//   (s=1, q=0) → sizeColor
-//   (s=0, q=1) → shapeColor
-//   (s=1, q=1) → mixed
-export function bivariateColor(s, q, sizeHex, shapeHex) {
-  const [sr, sg, sb] = hexToRgb(sizeHex);
-  const [qr, qg, qb] = hexToRgb(shapeHex);
-  const wr = 228, wg = 228, wb = 228;
-  const mr = (sr + qr) >> 1, mg = (sg + qg) >> 1, mb = (sb + qb) >> 1;
+//   (s=0, q=0) → lowSizeLowShape   (white)
+//   (s=1, q=0) → highSizeLowShape  (red)
+//   (s=0, q=1) → lowSizeHighShape  (blue)
+//   (s=1, q=1) → highSizeHighShape (black)
+export function bivariateColor(s, q) {
+  const [r00, g00, b00] = hexToRgb(BIVARIATE_COLOR_CONFIG.lowSizeLowShape);
+  const [r10, g10, b10] = hexToRgb(BIVARIATE_COLOR_CONFIG.highSizeLowShape);
+  const [r01, g01, b01] = hexToRgb(BIVARIATE_COLOR_CONFIG.lowSizeHighShape);
+  const [r11, g11, b11] = hexToRgb(BIVARIATE_COLOR_CONFIG.highSizeHighShape);
 
-  const r = (1 - s) * (1 - q) * wr + s * (1 - q) * sr + (1 - s) * q * qr + s * q * mr;
-  const g = (1 - s) * (1 - q) * wg + s * (1 - q) * sg + (1 - s) * q * qg + s * q * mg;
-  const b = (1 - s) * (1 - q) * wb + s * (1 - q) * sb + (1 - s) * q * qb + s * q * mb;
+  const r = (1-s)*(1-q)*r00 + s*(1-q)*r10 + (1-s)*q*r01 + s*q*r11;
+  const g = (1-s)*(1-q)*g00 + s*(1-q)*g10 + (1-s)*q*g01 + s*q*g11;
+  const b = (1-s)*(1-q)*b00 + s*(1-q)*b10 + (1-s)*q*b01 + s*q*b11;
 
   return [
     Math.max(0, Math.min(255, Math.round(r))),
