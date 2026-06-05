@@ -42,18 +42,37 @@
       </div>
     </div>
 
+    <!-- Bivariate distortion legend (visible only in distortion mode) -->
+    <div id="distortion-legend-section" class="distortion-hidden">
+      <div class="divider"></div>
+      <div class="control-group">
+        <div class="ctrl-label">Distortion Legend</div>
+        <div id="legend-wrapper">
+          <div class="legend-axis-label legend-top" id="legend-label-shape-max">1.0</div>
+          <div class="legend-center-row">
+            <div class="legend-axis-label legend-side" id="legend-label-size-min">0</div>
+            <canvas id="legend-canvas" width="120" height="120"></canvas>
+            <div class="legend-axis-label legend-side" id="legend-label-size-max">3.0</div>
+          </div>
+          <div class="legend-axis-label legend-bottom" id="legend-label-shape-min">0</div>
+          <div class="legend-axis-note">← Size distortion →  ↕ Shape</div>
+        </div>
+        <div class="legend-swatch-row">
+          <span class="legend-swatch" id="legend-swatch-size"></span><span class="legend-swatch-label">Size distortion</span>
+          <span class="legend-swatch" id="legend-swatch-shape"></span><span class="legend-swatch-label">Shape distortion</span>
+        </div>
+      </div>
+    </div>
+
   </div><!-- /#left-panel -->
 
   <!-- ── Center: map canvas ─────────────────────────────────── -->
   <div id="visualization">
     <canvas id="map-canvas"></canvas>
+    <canvas id="seam-canvas"></canvas>
 
     <div id="instruction">
       Click on the map to set the new North Pole
-    </div>
-
-    <div id="scroll-hint">
-      ← Scroll or drag to shift the map seam →
     </div>
 
     <div id="loading-overlay">
@@ -119,6 +138,52 @@
       <div class="btn-group">
         <button id="reset-btn">Reset</button>
         <button id="replay-btn" disabled>Replay Animation</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Seam -->
+    <div class="control-group" id="seam-group">
+      <div class="ctrl-label">Map Seam</div>
+      <div class="btn-group">
+        <button id="seam-btn">Change Seam</button>
+      </div>
+      <div id="seam-display" class="seam-display">Seam: 180°</div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Distortion Compare -->
+    <div class="control-group">
+      <div class="ctrl-label">Distortion Analysis</div>
+      <div class="btn-group">
+        <button id="distortion-toggle-btn">Show Distortion Compare</button>
+      </div>
+      <div id="distortion-color-controls" class="distortion-hidden">
+        <div class="color-row">
+          <span class="color-label">Size</span>
+          <input type="color" id="size-color-input" value="#4488ff">
+          <span class="color-desc">Size distortion</span>
+        </div>
+        <div class="color-row">
+          <span class="color-label">Shape</span>
+          <input type="color" id="shape-color-input" value="#ff4444">
+          <span class="color-desc">Shape distortion</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Distortion Presets -->
+    <div class="control-group">
+      <div class="ctrl-label">Distortion Presets</div>
+      <div class="btn-group" id="distortion-preset-btns">
+        <button class="preset-btn" data-key="minSize">Min Size Distortion</button>
+        <button class="preset-btn" data-key="maxSize">Max Size Distortion</button>
+        <button class="preset-btn" data-key="minShape">Min Shape Distortion</button>
+        <button class="preset-btn" data-key="maxShape">Max Shape Distortion</button>
       </div>
     </div>
 

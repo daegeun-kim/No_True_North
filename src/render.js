@@ -1,11 +1,12 @@
 import * as d3 from 'd3';
+import { bivariateColor, DISTORTION_COLOR_CONFIG } from './distortion.js';
 
-const OCEAN_COLOR     = '#616161';
-const LAND_COLOR      = '#a9b5a7';
-const BORDER_COLOR    = '#232323';
-const GRATICULE_COLOR = '#272727';
-const GRATICULE_ORIG  = '#3a5530';
-const SPHERE_STROKE   = '#282828';
+const OCEAN_COLOR     = '#828587';
+const LAND_COLOR      = '#d9d9d9';
+const BORDER_COLOR    = '#434343';
+const GRATICULE_COLOR = '#434343';
+const GRATICULE_ORIG  = '#434343';
+const SPHERE_STROKE   = '#434343';
 const NORTH_COLOR     = '#ea4646';
 const SOUTH_COLOR     = '#539eef';
 
@@ -22,8 +23,9 @@ function makePath(projection, ctx) {
 // ── Flat projection view ───────────────────────────────────────
 // data must contain: { land, countries, gratOrig }
 // state.transformedPoleCoords: { north: [lon,lat], south: [lon,lat] } | null
+// distOpts (optional): { active, distortionMap, sizeColor, shapeColor }
 
-export function renderFrame(canvas, proj, data, state) {
+export function renderFrame(canvas, proj, data, state, distOpts) {
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -37,8 +39,12 @@ export function renderFrame(canvas, proj, data, state) {
   if (data?.land) {
     ctx.beginPath();
     path(data.land);
-    ctx.fillStyle = LAND_COLOR;
+    ctx.fillStyle = distOpts?.active ? DISTORTION_COLOR_CONFIG.noDataColor : LAND_COLOR;
     ctx.fill();
+  }
+
+  if (distOpts?.active && distOpts.distortionMap?.size > 0 && data?.countries) {
+    drawCountryDistortionLayer(ctx, path, data.countries, distOpts.distortionMap, distOpts.sizeColor, distOpts.shapeColor);
   }
 
   drawGraticule(ctx, proj, state.graticuleMode || 'redefined', data?.gratOrig);
@@ -142,6 +148,21 @@ function drawMarkers(ctx, projection, state) {
   const { north, south } = state.transformedPoleCoords;
   if (north) drawPoleMarker(ctx, projection, north[0], north[1], 'N′', NORTH_COLOR);
   if (south) drawPoleMarker(ctx, projection, south[0], south[1], 'S′', SOUTH_COLOR);
+}
+
+function drawCountryDistortionLayer(ctx, path, countries, distortionMap, sizeHex, shapeHex) {
+  ctx.save();
+  ctx.globalAlpha = DISTORTION_COLOR_CONFIG.countryOpacity;
+  for (const feature of countries.features) {
+    const dist = distortionMap.get(feature.id);
+    if (!dist) continue;
+    const [cr, cg, cb] = bivariateColor(dist.sizeNorm, dist.shapeNorm, sizeHex, shapeHex);
+    ctx.beginPath();
+    path(feature);
+    ctx.fillStyle = `rgb(${cr},${cg},${cb})`;
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawPoleMarker(ctx, projection, lon, lat, label, color) {

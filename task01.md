@@ -1,566 +1,718 @@
-# TASK.md
+# Task: Fix Shape Distortion Normalization and Add Seam Selection Mode
 
-## Task: Projection List Cleanup, Projection Bug Fixes, UI Update, Left Panel Diagram, and Smoother Animation
+## Goal
 
-## Context
+Update the distortion comparison and map navigation behavior for the redefined world map tool.
 
-This project is **Unfixed Earth**, an interactive frontend web map visualization project.
+This update has two main changes:
 
-The core technical rule remains:
+1. **Fix shape distortion calculation**
+   - Shape distortion must be calculated independently from size distortion.
+   - Before comparing country shapes, normalize the current projected country and the reference country to the same size.
 
-```text
-Natural Earth original lon-lat
-→ perfect sphere coordinate reconstruction
-→ user-selected pole becomes new latitude +90°
-→ antipodal point becomes new latitude -90°
-→ generate redefined lon-lat
-→ apply selected projection
-→ render 2D map
-```
-
-Do not use D3 projection rotation, projection center, CSS transform, or screen-space panning to fake pole redefinition.
-
-D3 may be used only after the geometry has been transformed into the redefined coordinate system.
+2. **Add seam selection**
+   - The map seam should be fixed by default at 180° longitude.
+   - Add a user-controlled seam selection feature.
+   - Remove horizontal scrolling behavior.
+   - Seam selection applies to cylindrical, pseudocylindrical, and conic projections.
+   - Seam selection does not apply to azimuthal projections.
 
 ---
 
-## 1. Projection List Cleanup
+## Part 1: Shape Distortion Must Be Size-Normalized
 
-### Required Projection List
+## Problem
 
-Update the projection dropdown to use the following cleaned projection list:
+The current distortion system appears to calculate shape distortion by directly comparing:
 
 ```text
-Equirectangular
+locally accurate country projection
+vs
+country shape in current world map projection
+```
+
+If this comparison is done without size normalization, then size distortion incorrectly contributes to shape distortion.
+
+This causes incorrect results.
+
+Example:
+
+```text
+Mercator projection:
+Expected:
+- high size distortion
+- low shape distortion
+
+Current behavior:
+- high size distortion
+- high shape distortion
+```
+
+This happens because Mercator enlarges countries at high latitudes. If the enlarged country is directly compared against the reference country without scaling them to the same area, the overlap becomes poor even though the local shape is mostly preserved.
+
+---
+
+## Required Fix
+
+Shape distortion must be calculated after removing size difference.
+
+Size distortion and shape distortion must be independent visual channels.
+
+### Correct conceptual separation
+
+```text
+Size distortion:
+Measures area enlargement or shrinkage.
+
+Shape distortion:
+Measures deformation after size difference has been removed.
+```
+
+### Required behavior
+
+Before calculating shape distortion:
+
+1. Project the country using the current world map projection.
+2. Project the country using the local reference projection.
+3. Move both shapes to a common centroid.
+4. Scale both shapes to the same area.
+5. Then compare the shapes.
+
+Shape distortion should not increase only because one projected shape is larger than the other.
+
+---
+
+## Correct Shape Distortion Pipeline
+
+For each country:
+
+### Step 1: Current projected country
+
+Generate the country polygon in the current world map projection.
+
+```text
+currentShape = projectCountry(countryGeometry, currentProjection)
+```
+
+### Step 2: Reference country shape
+
+Generate the locally accurate reference projection for the same country.
+
+```text
+referenceShape = projectCountry(countryGeometry, localReferenceProjection)
+```
+
+### Step 3: Normalize centroid
+
+Move both shapes so their centroids match.
+
+```text
+currentShapeCentered = translateToOrigin(currentShape)
+referenceShapeCentered = translateToOrigin(referenceShape)
+```
+
+### Step 4: Normalize area
+
+Scale both shapes so their areas are equal.
+
+```text
+currentArea = polygonArea(currentShapeCentered)
+referenceArea = polygonArea(referenceShapeCentered)
+
+scaleFactor = sqrt(referenceArea / currentArea)
+currentShapeNormalized = scale(currentShapeCentered, scaleFactor)
+```
+
+After this step:
+
+```text
+area(currentShapeNormalized) ≈ area(referenceShapeCentered)
+```
+
+### Step 5: Compare normalized shapes
+
+Calculate shape similarity after size normalization.
+
+Possible formula:
+
+```text
+shapeSimilarity = intersectionArea(currentShapeNormalized, referenceShapeCentered) /
+                  unionArea(currentShapeNormalized, referenceShapeCentered)
+
+shapeDistortion = 1 - shapeSimilarity
+```
+
+### Important requirement
+
+Do not calculate shape distortion using raw projected polygons with different areas.
+
+---
+
+## Alternative Shape Distortion Method
+
+If polygon overlap is difficult or unstable, use a Tissot-style local differential method.
+
+This is often cleaner because size and shape distortion are naturally separated.
+
+At each sample point inside a country:
+
+```text
+horizontalScale = local east-west projected scale
+verticalScale = local north-south projected scale
+
+sizeDistortion = abs(log(horizontalScale * verticalScale))
+shapeDistortion = abs(log(horizontalScale / verticalScale))
+```
+
+Then aggregate per country:
+
+```text
+countrySizeDistortion = area-weighted average of local sizeDistortion
+countryShapeDistortion = area-weighted average of local shapeDistortion
+```
+
+### Expected results
+
+```text
+Mercator:
+- horizontalScale ≈ verticalScale
+- high sizeDistortion near poles
+- low shapeDistortion
+
+Gall-Peters:
+- horizontalScale and verticalScale differ significantly
+- low sizeDistortion
+- high shapeDistortion
+```
+
+### Recommendation
+
+Use the Tissot-style method if it is easier to implement reliably.
+
+Use the polygon-overlap method only if size normalization is correctly implemented.
+
+---
+
+## Size Distortion Calculation
+
+Size distortion should continue to measure area difference directly.
+
+For each country:
+
+```text
+sizeRatio = currentProjectedArea / referenceProjectedArea
+sizeDistortion = abs(log(sizeRatio))
+```
+
+Size distortion should not be normalized away during the size distortion calculation.
+
+Only shape distortion requires size normalization before comparison.
+
+---
+
+## Required Visual Behavior After Fix
+
+After fixing shape distortion:
+
+### Mercator
+
+Expected visual result:
+
+```text
+High-latitude countries:
+- high size distortion color
+- low shape distortion color
+```
+
+### Gall-Peters
+
+Expected visual result:
+
+```text
+Most countries:
+- low size distortion color
+- high shape distortion color
+```
+
+### Default map
+
+The default map should still show distortion.
+
+The default map should not be treated as zero distortion.
+
+---
+
+# Part 2: Add Seam Selection Feature
+
+## Goal
+
+Add a controlled seam selection feature for projections where seam location matters.
+
+The map should no longer be horizontally scrollable.
+
+Instead, the user should explicitly choose the seam location using a new **Change Seam** interaction.
+
+---
+
+## Default Seam Behavior
+
+By default, the seam should be fixed at:
+
+```text
+180° longitude
+```
+
+This means the default seam is the antimeridian.
+
+### Required default behavior
+
+- Map loads with seam at 180° longitude.
+- No horizontal scrolling is available.
+- The map is stable and does not shift left/right through drag or scroll.
+- Distortion calculations use the current seam setting.
+- Default seam remains 180° unless the user changes it.
+
+---
+
+## Remove Horizontal Scrolling
+
+Horizontal map scrolling should no longer be available.
+
+### Remove or disable
+
+- Drag-to-scroll world map behavior.
+- Infinite horizontal wrap scrolling.
+- CSS or SVG translation that visually shifts the world map without updating the projection.
+- Any scroll behavior that changes country position without updating seam and distortion values.
+
+### Reason
+
+Free horizontal scrolling makes distortion comparison ambiguous.
+
+If the seam changes visually but the projection object and distortion calculation do not update, the displayed distortion becomes inconsistent with the visible map.
+
+The seam must be a controlled projection parameter, not a visual scroll offset.
+
+---
+
+## Seam Selection Applicability
+
+Seam selection applies to:
+
+```text
+Cylindrical projections
+Pseudocylindrical projections
+Conic projections
+```
+
+Seam selection does not apply to:
+
+```text
+Azimuthal projections
+```
+
+### Required behavior by projection type
+
+#### Cylindrical projections
+
+The seam controls the longitude where the map is cut.
+
+Examples:
+
+```text
 Mercator
-Robinson
 Gall-Peters
-Cylindrical Equal Area
+Equirectangular
+```
+
+#### Pseudocylindrical projections
+
+The seam controls the longitude where the world shape is cut.
+
+Examples:
+
+```text
 Mollweide
+Natural Earth
+Robinson
+Sinusoidal
+Eckert-style projections
+```
+
+#### Conic projections
+
+The seam controls the central longitude / cut direction of the conic projection.
+
+Examples:
+
+```text
 Lambert Conformal Conic
-Albers Equal-Area Conic
+Conic Equal Area
+Conic Equidistant
+```
+
+#### Azimuthal projections
+
+The seam selection button should be hidden or disabled.
+
+Examples:
+
+```text
 Azimuthal Equidistant
 Lambert Azimuthal Equal-Area
 Orthographic
-Peirce Quincuncial
+Stereographic
 ```
 
-### Remove / Do Not Include
+---
 
-Do not include these duplicate or ambiguous entries:
+## UI: Change Seam Button
+
+Add a button labeled:
 
 ```text
-Lambert conformal conic
-Azimuthal equidistant
-Azimuthal
-Gauss-Kruger
+Change Seam
+```
+
+### Button location
+
+Place the button in the right control panel near projection and pole settings.
+
+### Button states
+
+Default state:
+
+```text
+Change Seam
+```
+
+Active state:
+
+```text
+Click Map to Set Seam
+```
+
+or:
+
+```text
+Selecting Seam...
+```
+
+### Required behavior
+
+When the user clicks **Change Seam**:
+
+1. Enter seam selection mode.
+2. Show a vertical seam preview line on the map.
+3. The preview line follows the user's cursor horizontally.
+4. The line represents the longitude that will become the new seam.
+5. User clicks on the map to confirm the seam.
+6. Seam longitude is updated.
+7. Projection is recalculated.
+8. Country distortion is recalculated if Distortion Compare Mode is active.
+9. Exit seam selection mode.
+
+---
+
+## Seam Preview Line
+
+When seam selection mode is active, display a vertical line along the projected longitude under the cursor.
+
+### Required behavior
+
+- The line should be visible above the map.
+- The line should follow the cursor movement.
+- The line should represent a meridian / longitude line.
+- The line should update in real time as the cursor moves.
+- The line should be visually distinct but not too strong.
+- The line should not permanently alter the map until the user clicks.
+
+### Visual recommendation
+
+Use a dashed vertical line or projected meridian line.
+
+Example visual style:
+
+```js
+const SEAM_SELECTION_STYLE = {
+  lineColor: "#111827",
+  lineOpacity: 0.8,
+  lineWidth: 2,
+  lineDash: "6 4"
+};
+```
+
+Place this style configuration at the top of the relevant JavaScript file.
+
+---
+
+## How to Interpret Cursor as Seam Longitude
+
+When seam selection mode is active:
+
+1. Read the cursor position on the map.
+2. Invert the projection to get geographic coordinates.
+3. Extract longitude from the inverted coordinate.
+4. Use that longitude as the candidate seam longitude.
+5. Draw the seam preview line along that longitude.
+
+Pseudo logic:
+
+```js
+const [lon, lat] = projection.invert([mouseX, mouseY]);
+candidateSeamLongitude = lon;
+drawMeridian(candidateSeamLongitude);
+```
+
+If projection inversion fails:
+
+```text
+Do not update the seam preview line.
+Keep the previous valid candidate seam longitude.
+```
+
+---
+
+## Updating the Projection from Seam Longitude
+
+The seam location should be handled as a projection parameter.
+
+### Concept
+
+For cylindrical and pseudocylindrical projections:
+
+```text
+seamLongitude = longitude where map is cut
+centralMeridian = seamLongitude - 180°
+```
+
+Example:
+
+```text
+seamLongitude = 180°
+centralMeridian = 0°
+```
+
+For D3 rotation:
+
+```js
+projection.rotate([-centralMeridian, currentPoleLatRotation, currentGamma]);
+```
+
+or equivalent based on the current projection architecture.
+
+### Required behavior
+
+Changing the seam should update the actual projection orientation.
+
+Do not implement seam change as a visual SVG or CSS translation only.
+
+The rendered map and the distortion calculation must both use the same seam value.
+
+---
+
+## Seam State
+
+Maintain seam as explicit application state.
+
+Example:
+
+```js
+const state = {
+  seamLongitude: 180,
+  isSelectingSeam: false
+};
+```
+
+### Required behavior
+
+- `seamLongitude` defaults to `180`.
+- Seam value persists when switching between supported projection types.
+- Seam value is ignored for azimuthal projections.
+- Seam value is used in projection generation for cylindrical, pseudocylindrical, and conic projections.
+- Seam value is used in distortion recalculation.
+
+---
+
+## Seam Display
+
+Add a small seam info display in the UI.
+
+Example:
+
+```text
+Current seam: 180°
+```
+
+When the seam is changed:
+
+```text
+Current seam: 120°W
+```
+
+or:
+
+```text
+Current seam: -120°
+```
+
+Use whichever longitude display format is already consistent with the project.
+
+---
+
+## Seam and Distortion Calculation
+
+Distortion calculation must use the current seam setting.
+
+### Required behavior
+
+When seam changes:
+
+1. Rebuild the projection with the new seam.
+2. Reproject countries.
+3. Recalculate country-level size distortion.
+4. Recalculate country-level shape distortion.
+5. Recalculate bivariate country colors.
+6. Redraw the map.
+
+### Important
+
+Do not calculate distortion based on default seam if the user has selected a different seam.
+
+Do not visually move the map without recalculating distortion.
+
+---
+
+## Seam and Projection Presets
+
+Projection-specific Min/Max distortion buttons should respect seam logic.
+
+### Required behavior
+
+When a Min/Max distortion button is clicked:
+
+- It may update pole/orientation settings.
+- It may update seam only if the preset explicitly requires it.
+- Otherwise, it should keep the current seam value.
+- After applying the preset, recalculate projection and distortion.
+
+### Recommended first implementation
+
+Keep seam unchanged when using Min/Max distortion buttons.
+
+This makes the interaction more predictable.
+
+---
+
+## Seam Selection and Azimuthal Projections
+
+For azimuthal projections:
+
+- Hide the **Change Seam** button, or
+- Disable it with a tooltip/message.
+
+Recommended disabled message:
+
+```text
+Seam selection is not used for azimuthal projections.
 ```
 
 ### Reason
 
-- `Lambert conformal conic` is a duplicate of `Lambert Conformal Conic`.
-- `Azimuthal equidistant` is a duplicate of `Azimuthal Equidistant`.
-- `Azimuthal` is a projection family, not a specific projection. Use `Orthographic`, `Azimuthal Equidistant`, and `Lambert Azimuthal Equal-Area` as specific options.
-- `Gauss-Kruger` should not be included in this version because it is closer to transverse Mercator / regional grid usage and is not a strong whole-world projection option for the first version.
+Azimuthal projections are centered on a point and do not use the same left/right seam logic as cylindrical, pseudocylindrical, or conic projections.
 
 ---
 
-## 2. Projection Mapping Rules
+## Color and Style Configuration Requirement
 
-Each dropdown option must map to the correct D3 projection.
+All color, transparency, and seam preview style values must be placed at the top of each relevant JavaScript file.
 
-Use this mapping:
+This includes:
 
-```text
-Equirectangular              -> d3.geoEquirectangular()
-Mercator                     -> d3.geoMercator()
-Robinson                     -> d3.geoRobinson()
-Gall-Peters                  -> d3.geoCylindricalEqualArea().parallel(45)
-Cylindrical Equal Area       -> d3.geoCylindricalEqualArea()
-Mollweide                    -> d3.geoMollweide()
-Lambert Conformal Conic      -> d3.geoConicConformal().parallels([30, 60])
-Albers Equal-Area Conic      -> d3.geoConicEqualArea().parallels([20, 50])
-Azimuthal Equidistant        -> d3.geoAzimuthalEquidistant()
-Lambert Azimuthal Equal-Area -> d3.geoAzimuthalEqualArea()
-Orthographic                 -> d3.geoOrthographic()
-Peirce Quincuncial           -> d3.geoPeirceQuincuncial()
+- Size distortion color
+- Shape distortion color
+- Low distortion color
+- Country opacity
+- Country border color
+- Country border opacity
+- Ocean color
+- No-data country color
+- Seam preview line color
+- Seam preview line opacity
+- Seam preview line width
+- Seam preview line dash pattern
+
+Example:
+
+```js
+const MAP_STYLE_CONFIG = {
+  sizeDistortionColor: "#2563eb",
+  shapeDistortionColor: "#dc2626",
+  lowDistortionColor: "#f8fafc",
+  countryOpacity: 0.72,
+  countryBorderColor: "#111827",
+  countryBorderOpacity: 0.75,
+  oceanColor: "#ffffff",
+  noDataColor: "#e5e7eb",
+  seamPreviewColor: "#111827",
+  seamPreviewOpacity: 0.8,
+  seamPreviewWidth: 2,
+  seamPreviewDash: "6 4"
+};
 ```
 
-If a projection constructor comes from `d3-geo-projection`, import it correctly.
+Do not hard-code these values inside rendering functions.
 
 ---
 
-## 3. Bug Fix: Azimuthal Equidistant Is Incorrect
+## Updated Interaction Flow
 
-### Current Problem
+### Normal use
 
-Current `Azimuthal Equidistant` appears to be implemented as Lambert azimuthal equal-area.
+1. User opens the map.
+2. Projection loads with default seam at 180°.
+3. Horizontal scrolling is disabled.
+4. User can change projection and pole settings.
+5. User can activate Distortion Compare Mode.
 
-### Required Fix
+### Seam selection use
 
-Make sure:
-
-```text
-Azimuthal Equidistant        -> d3.geoAzimuthalEquidistant()
-Lambert Azimuthal Equal-Area -> d3.geoAzimuthalEqualArea()
-```
-
-These two projections must be separate dropdown options and must produce visibly different results.
-
-### Acceptance Criteria
-
-- Selecting `Azimuthal Equidistant` uses the equidistant azimuthal projection.
-- Selecting `Lambert Azimuthal Equal-Area` uses the Lambert azimuthal equal-area projection.
-- The two outputs are visually different.
-- Both projections use the sphere-first redefined coordinate system before projection.
-- The selected custom north pole appears at the center for both azimuthal projections.
-- The original north and south poles are ordinary points after custom pole selection.
+1. User clicks **Change Seam**.
+2. Seam preview line appears.
+3. User moves cursor over the map.
+4. Preview line follows cursor longitude.
+5. User clicks map to confirm seam.
+6. Seam value updates.
+7. Map redraws using the new seam.
+8. Distortion values update if Distortion Compare Mode is active.
 
 ---
 
-## 4. Bug Fix: Lambert Conformal Conic Not Showing
+## Updated Success Criteria
 
-### Current Problem
+The update is successful if:
 
-`Lambert Conformal Conic` is not rendering or is not visible.
-
-### Required Fix
-
-Make `Lambert Conformal Conic` render correctly.
-
-Use:
-
-```ts
-d3.geoConicConformal().parallels([30, 60])
-```
-
-Then apply the existing transformed/redefined coordinates to this projection.
-
-### Things to Check
-
-Check for:
-
-- Incorrect projection name mapping
-- Missing import
-- Incorrect constructor
-- Incorrect `fitExtent`, `scale`, or `translate`
-- Geometry being clipped out
-- Projection receiving original lon-lat instead of redefined lon-lat
-- Projection factory returning `null` or falling back incorrectly
-- Conic projection not being included in render condition branches
-
-### Acceptance Criteria
-
-- `Lambert Conformal Conic` appears in the dropdown.
-- Selecting it renders the world map successfully.
-- The map uses transformed/redefined coordinates.
-- The selected new pole controls the conic coordinate system.
-- Original north/south poles do not anchor the conic map.
+- Shape distortion is no longer contaminated by size distortion.
+- Shape comparison normalizes country size before overlap comparison.
+- Mercator generally shows high size distortion but low shape distortion.
+- Gall-Peters generally shows low size distortion but high shape distortion.
+- Default map still shows distortion.
+- The default seam is fixed at 180°.
+- Horizontal scrolling is no longer available.
+- The **Change Seam** button exists for cylindrical, pseudocylindrical, and conic projections.
+- Seam selection shows a vertical or meridian preview line following the cursor.
+- Clicking the map sets the seam.
+- Seam change updates the actual projection, not only the visual map position.
+- Distortion values are recalculated after seam changes.
+- Seam selection is hidden or disabled for azimuthal projections.
+- Color, transparency, and seam style settings are placed at the top of relevant JavaScript files.
 
 ---
 
-## 5. UI Update: Bright Mode
+## Final Concept Summary
 
-### Required Change
+This update fixes the distortion logic and stabilizes the projection seam behavior.
 
-Make the entire interface bright mode.
+Shape distortion must be calculated independently from size distortion by normalizing the compared country shapes to the same area before measuring shape difference. This prevents projections like Mercator from incorrectly showing high shape distortion only because countries are enlarged.
 
-### Visual Requirements
-
-- Main background should be white.
-- Panels should use white or very light gray.
-- Text should be dark gray or black.
-- Map area should remain visually clear against the white interface.
-- Avoid dark-mode styling.
-- Avoid black full-page backgrounds.
-
-### Acceptance Criteria
-
-- The app visually reads as a bright-mode interface.
-- No major container uses a dark background.
-- Text remains readable.
-
----
-
-## 6. UI Update: Larger Control Panel and Text
-
-### Required Change
-
-Make the control panel and text approximately **1.5 times larger** than the current version.
-
-### Apply To
-
-- Projection dropdown
-- Graticule toggle
-- Reset button
-- Any other control button
-- Panel headings
-- Pole coordinate information
-- Status text
-
-### Acceptance Criteria
-
-- Control panel is easier to read.
-- Text is visibly larger.
-- Buttons and dropdowns have larger clickable areas.
-- Layout remains clean and does not feel cramped.
-
----
-
-## 7. Layout Update: Add Left Panel
-
-### Required Change
-
-The map should be placed at the center of the interface.
-
-Add a left panel that has approximately the same width as the existing right control panel.
-
-Final layout:
-
-```text
-Left explanatory panel | Center map view | Right control panel
-```
-
-### Layout Requirements
-
-- Center map area should remain the main focus.
-- Left panel and right panel should be visually balanced.
-- Left panel width should be approximately equal to right control panel width.
-- The map should be horizontally and vertically centered in the middle region.
-- The interface should not feel left-heavy or right-heavy.
-
----
-
-## 8. Left Panel: Projection Formation Diagram
-
-### Required Change
-
-Add a visual diagram in the left panel showing how the selected projection surface creates the map.
-
-The diagram should be similar in concept to the attached reference image:
-
-```text
-A globe with a cylinder or cone placed around/on top of it,
-with the two poles indicated,
-showing how the map is created through projection transformation.
-```
-
-### Diagram Behavior by Projection Type
-
-The left panel diagram should change depending on the selected projection family.
-
-### Cylindrical / Pseudo-Cylindrical Projections
-
-For:
-
-```text
-Equirectangular
-Mercator
-Robinson
-Gall-Peters
-Cylindrical Equal Area
-Mollweide
-```
-
-Show:
-
-- A globe
-- A cylinder around the globe
-- New north pole indicated
-- New south pole indicated
-- Visual suggestion that the cylinder unwraps into a rectangular map
-
-The cylinder does not need to be physically perfect. It can be a simplified SVG diagram.
-
-### Conic Projections
-
-For:
-
-```text
-Lambert Conformal Conic
-Albers Equal-Area Conic
-```
-
-Show:
-
-- A globe
-- A cone placed over/around the globe, similar to the attached reference image
-- New north pole indicated near the cone apex direction
-- New south pole indicated on the opposite side
-- Visual suggestion that the cone unwraps into a conic map
-
-### Azimuthal Projections
-
-For:
-
-```text
-Azimuthal Equidistant
-Lambert Azimuthal Equal-Area
-Orthographic
-Peirce Quincuncial
-```
-
-Show:
-
-- A globe
-- A flat projection plane touching or facing the globe near the selected new north pole
-- New north pole indicated at the projection center
-- New south pole indicated opposite the center direction where appropriate
-
-### Diagram Style
-
-- Use simple SVG or HTML/CSS vector drawing.
-- Use thin outlines.
-- Use white/light background.
-- Use clear but minimal labels.
-- Do not use image assets unless necessary.
-- The diagram can be schematic, not physically exact.
-- The diagram should remain visually similar in spirit to the reference image: simple globe + projection surface + pole indicators.
-
-### Acceptance Criteria
-
-- Left panel contains a clear diagram.
-- Diagram updates when projection family changes.
-- Cylindrical projections show a cylinder.
-- Conic projections show a cone.
-- Azimuthal projections show a plane.
-- New north and south poles are indicated.
-- Diagram is readable in bright mode.
-
----
-
-## 9. Left Panel: Pole Location Information
-
-### Required Change
-
-Below the projection formation diagram, show information about the current new north and south poles.
-
-### Required Information
-
-Show:
-
-```text
-New North Pole
-Original lon-lat: [lon, lat]
-Redefined coordinate: 90° N, 0° E
-Location: [country / ocean / region if available]
-
-New South Pole
-Original lon-lat: [lon, lat]
-Redefined coordinate: 90° S, 0° E
-Location: [country / ocean / region if available]
-```
-
-### Notes
-
-At the exact pole, longitude is mathematically undefined. For UI clarity, it is acceptable to display:
-
-```text
-90° N, 0° E
-90° S, 0° E
-```
-
-But the implementation should understand that the longitude value at the pole is arbitrary.
-
-### Location / Country
-
-If country detection is already available or easy from the current Natural Earth country geometry, show the country name.
-
-If not available yet, show one of:
-
-```text
-Country detection not available
-Ocean / land unknown
-Location lookup pending
-```
-
-Do not add a heavy new geocoder or external API for this version.
-
-### Acceptance Criteria
-
-- North pole original lon-lat is shown.
-- South pole original lon-lat is shown.
-- Redefined pole coordinates are shown clearly.
-- The display does not imply that longitude at the pole is mathematically meaningful.
-- No external API is required.
-
----
-
-## 10. Animation Update: Smooth and Slower Transformation
-
-### Current Problem
-
-The animation from original map to redefined map is too abrupt.
-
-### Required Change
-
-Make the transition from the previous map state to the redefined map state smoother and slower.
-
-### Animation Requirements
-
-- Continents should move smoothly from old projected positions to new projected positions.
-- Avoid sudden jumps.
-- Avoid instant geometry replacement.
-- Animation should be slow enough for the user to understand that the map is being reconstructed.
-- Recommended duration:
-
-```text
-1200ms to 2000ms
-```
-
-- Use easing such as:
-
-```text
-easeCubicInOut
-```
-
-or equivalent.
-
-### Important Technical Rule
-
-The animation can interpolate visually between old and new projected coordinates, but the final state must be mathematically correct.
-
-Do not fake the final map with CSS transform.
-
-Do not rely on screen-space rotation as the actual projection logic.
-
-### Acceptance Criteria
-
-- Map transformation feels smooth.
-- Continents visibly move from old positions to new positions.
-- The selected pole moves toward its correct final position.
-- Cylindrical projections place the selected pole at the top edge in the final state.
-- Azimuthal projections place the selected pole at the center in the final state.
-- The final rendered geometry uses the sphere-first coordinate reconstruction pipeline.
-
----
-
-## 11. Preserve Existing Core Features
-
-Do not remove or break existing required features:
-
-- 2D map starting view
-- Projection dropdown
-- Graticule toggle
-- Reset button
-- Custom north pole selection
-- Antipodal south pole calculation
-- Sphere-first coordinate reconstruction
-- Horizontal scrolling for cylindrical / pseudo-cylindrical projections
-- Original lon-lat graticule mode
-- Redefined lon-lat graticule mode
-
----
-
-## 12. Required Validation Tests
-
-After this task, verify the following.
-
-### Projection Mapping Tests
-
-- `Azimuthal Equidistant` and `Lambert Azimuthal Equal-Area` produce different maps.
-- `Lambert Conformal Conic` renders successfully.
-- `Gall-Peters` differs from generic `Cylindrical Equal Area`.
-- Duplicate projection names do not appear in the dropdown.
-- `Gauss-Kruger` does not appear in the dropdown.
-
-### Coordinate System Tests
-
-Use selected pole:
-
-```text
-[30°, 45°]
-```
-
-Expected:
-
-- `[30°, 45°]` transforms to new latitude `+90°`.
-- `[-150°, -45°]` transforms to new latitude `-90°`.
-- In equirectangular, `[30°, 45°]` appears on the top edge.
-- In equirectangular, `[-150°, -45°]` appears on the bottom edge.
-- Original north pole no longer anchors the map.
-- Redefined graticule aligns with the transformed geometry.
-- Original graticule appears distorted.
-
-### UI Tests
-
-- Interface is bright mode.
-- Text and controls are approximately 1.5 times larger.
-- Left panel is present.
-- Left panel width roughly matches right control panel width.
-- Map is centered.
-- Projection formation diagram appears in the left panel.
-- Diagram changes according to projection family.
-- Pole location information appears below the diagram.
-
-### Animation Tests
-
-- Transition is not abrupt.
-- Continents move smoothly.
-- Final projected geometry is correct.
-- Animation duration is approximately 1200ms to 2000ms.
-
----
-
-## 13. Files to Inspect First
-
-Start by inspecting files related to:
-
-```text
-projection list / projection factory
-coordinate transformation
-map rendering
-animation
-layout
-control panel
-```
-
-Likely file areas:
-
-```text
-src/projection/*
-src/coordinate/*
-src/components/*
-src/styles/*
-src/App*
-```
-
-Do not modify unrelated files.
-
----
-
-## 14. Implementation Priority
-
-Recommended order:
-
-1. Fix projection list and remove duplicates.
-2. Fix projection constructor mapping.
-3. Fix `Azimuthal Equidistant` vs `Lambert Azimuthal Equal-Area`.
-4. Fix `Lambert Conformal Conic` rendering.
-5. Verify all projections still use transformed/redefined coordinates.
-6. Add bright-mode styling.
-7. Increase control/text scale by approximately 1.5x.
-8. Add left panel layout.
-9. Add projection formation diagram.
-10. Add pole location information.
-11. Smooth and slow the map transformation animation.
-12. Run validation tests.
-
----
-
-## 15. Do Not Do
-
-Do not:
-
-- Add backend.
-- Add external APIs.
-- Add database.
-- Add new data layers.
-- Add user accounts.
-- Add export features.
-- Add mobile optimization as a separate task.
-- Reintroduce globe-first starting view.
-- Use D3 rotation as the main pole-redefinition method.
-- Use CSS transform as the actual projection method.
-- Change Git state.
-- Modify unrelated files.
+The map should also stop using horizontal scrolling. Instead, the seam is fixed at 180° by default and can be changed through an explicit **Change Seam** interaction. The user selects a new seam by moving the cursor over the map and clicking the desired longitude. This seam affects cylindrical, pseudocylindrical, and conic projections, and the projection and distortion calculations must both use the selected seam.
