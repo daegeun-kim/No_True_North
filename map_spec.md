@@ -78,13 +78,15 @@ width: 100vw;  height: 100vh;  overflow: hidden;
     - axis label "High Shape" (top)
     - center row: axis label "Low Size" | `<canvas id="legend-canvas" width="120" height="120">` | axis label "High Size"
     - axis label "Low Shape" (bottom)
-  - `.legend-swatch-row`: two swatches (`#legend-swatch-size`, `#legend-swatch-shape`) each followed by a label text
+  - Numeric axis labels below the canvas row:
+    - Size axis: "0" (left) — `sizeDistortionMax` value (right, e.g. "3.0")
+    - Shape axis: "0" (bottom) — `shapeDistortionMax` value (top, e.g. "1.0")
+  - `.legend-swatch-row`: two swatches (`#legend-swatch-size`, `#legend-swatch-shape`) each followed by a label text; colors sourced from `BIVARIATE_COLOR_CONFIG`
 
 ### 4.2 Center (`#visualization`)
 
 - `<canvas id="map-canvas">` — fills the centre column, cursor is crosshair.
 - `#instruction` overlay — "Click on the map to set the new North Pole" — hidden once a pole is set.
-- `#scroll-hint` overlay — "← Scroll or drag to shift the map seam →" — visible only during `state-projected` phase with a cylindrical projection and a custom pole.
 - `#loading-overlay` — shown until data loads, then faded out.
 
 ### 4.3 Right Panel (`#control-panel`)
@@ -93,11 +95,12 @@ width: 100vw;  height: 100vh;  overflow: hidden;
 - **Projection dropdown** (`#projection-select`) — 12 options in four optgroups (see §6).
 - **Graticule segmented toggle** — two buttons `#grat-redefined` / `#grat-original`; active button has `background:#1a6cc0; color:#fff`.
 - **Controls group**: Reset button (`#reset-btn`), Replay Animation button (`#replay-btn`, disabled until a pole is set).
+- **Seam group** (visible only when `isSeamApplicable(state.projType)` is true):
+  - "Change Seam" button (`#seam-btn`) — label "Change Seam" in default state; label "Click Map to Set Seam" when `state.isSelectingSeam` is true; gains class `active-toggle` when selecting.
+  - `#seam-display` — shows current seam longitude, e.g. "Current seam: 180°" or "Current seam: 120°W".
 - **Distortion Analysis group**:
   - Toggle button `#distortion-toggle-btn` — label "Show Distortion Compare" when inactive, "Hide Distortion Compare" when active; gains class `active-toggle` when on.
-  - `#distortion-color-controls` (hidden by default with class `distortion-hidden`) — two color rows:
-    - Size: label "Size", `<input type="color" id="size-color-input" value="#4488ff">`, description "Size distortion"
-    - Shape: label "Shape", `<input type="color" id="shape-color-input" value="#ff4444">`, description "Shape distortion"
+  - `#distortion-color-controls` (hidden by default with class `distortion-hidden`) — informational text only: "Colors are fixed — see legend."
 - **Distortion Presets group**: four buttons with class `preset-btn` and `data-key` attributes:
   - `data-key="minSize"` → "Min Size Distortion"
   - `data-key="maxSize"` → "Max Size Distortion"
@@ -162,14 +165,17 @@ Azimuthal
 
 All projections use `.fitExtent([[20,20],[w-20,h-20]], { type:'Sphere' })` and end with `.rotate([0,0,0])`. The only exception is `mercator` which also calls `.clipExtent([[0,0],[w,h]])`.
 
-**Cylindrical types** (those that support east-west seam scrolling):
+**Seam-applicable types** (those that support seam selection — cylindrical, pseudocylindrical, and conic):
 
 ```js
-export const CYLINDRICAL_TYPES = new Set([
-  'equirectangular','mercator','robinson',
-  'gallPeters','cylindricalEqualArea','mollweide',
+export const SEAM_TYPES = new Set([
+  'equirectangular', 'mercator', 'gallPeters', 'cylindricalEqualArea',
+  'robinson', 'mollweide',
+  'lambertConformalConic', 'albersEqualAreaConic',
 ]);
 ```
+
+**`isSeamApplicable(type)`** returns `SEAM_TYPES.has(type)`. Used to show/hide the Seam group in the right panel and to enable/disable seam rotation in `redrawProjected`.
 
 **Projection family** (used by the left-panel diagram):
 
@@ -279,15 +285,15 @@ const state = {
   customPole:            null,          // original { lon, lat }
   derivedPole:           null,          // original { lon, lat } — antipodal
   coordinateSystem:      DEFAULT_SYSTEM,
-  scrollDeg:             0,
+  seamLongitude:         180,           // longitude where map is cut, default antimeridian
+  isSelectingSeam:       false,         // seam selection mode active
+  candidateSeamLon:      null,          // transient: lon under cursor during seam selection
   data:                  null,          // raw GeoJSON from loadData()
   transformedData:       null,          // { land, countries, gratOrig }
   transformedPoleCoords: null,          // { north:[λ',φ'], south:[λ',φ'] } | null
   cancelAnim:            null,          // cancel function for running animation
   // Distortion compare mode
   distortionMode:        false,
-  sizeColor:             '#4488ff',     // color for size distortion
-  shapeColor:            '#ff4444',     // color for shape distortion
   countrySamples:        null,          // Map<id, [[lon,lat],...]> — precomputed original coords
   distortionMap:         null,          // Map<id, {sizeNorm, shapeNorm}> — current distortion values
 };
@@ -310,7 +316,7 @@ The projection **never** receives `state.data` directly — only `state.transfor
 
 ---
 
-## 9. Projection Cache and Scroll
+## 9. Projection Cache and Seam
 
 ```js
 const projCache = { type: null, w: null, h: null, proj: null };
@@ -324,35 +330,37 @@ function getBaseProj(type) {
 }
 ```
 
-Scroll is a **pure seam shift** on the already-transformed `[λ', φ']` coordinates — it is not pole simulation:
+The seam is controlled by rotating the base projection. The seam longitude `s` places the map cut at λ' = s:
+
+```
+centralMeridian = s − 180
+proj.rotate([180 − s, 0, 0])
+```
+
+Default: `s = 180` → `rotate([0, 0, 0])` (seam at antimeridian, no rotation).
 
 ```js
 function redrawProjected() {
   const proj = getBaseProj(state.projType);
-  proj.rotate([state.scrollDeg, 0, 0]);  // seam shift only
+  if (isSeamApplicable(state.projType)) {
+    proj.rotate([180 - state.seamLongitude, 0, 0]);
+  } else {
+    proj.rotate([0, 0, 0]);
+  }
   activeProjection = proj;
   draw();
 }
 ```
 
-`state.scrollDeg` is updated on horizontal drag/wheel (cylindrical only):
-
-```js
-function handleMapScrollDelta(pxDelta) {
-  if (!isCylindrical(state.projType)) return;
-  const degPerPx = 360 / Math.max(canvasW, 1);
-  state.scrollDeg -= pxDelta * degPerPx;
-  redrawProjected();
-}
-```
+There is no horizontal scroll. The seam is an explicit projection parameter set only through the Change Seam interaction (§15).
 
 ---
 
 ## 10. Pole Selection Flow
 
 ```
-user clicks 2D map
-→ projection.invert([x,y])             → [λ', φ']  (redefined, scroll-corrected by D3)
+user clicks 2D map (when phase === 'projected' and !state.isSelectingSeam)
+→ projection.invert([x,y])             → [λ', φ']  (redefined, seam-corrected by D3)
 → inverseTransformPoint(λ', φ', system) → [origLon, origLat]
 → state.customPole  = { lon:origLon, lat:origLat }
 → state.derivedPole = antipodal(origLon, origLat)
@@ -370,17 +378,18 @@ user clicks 2D map
 
 ```
 oldTransformedData = state.transformedData
-oldScrollDeg       = state.scrollDeg
 
 newSystem = buildCoordinateSystem(customPole.lon, customPole.lat)
 state.coordinateSystem = newSystem
-state.scrollDeg        = 0
 state.transformedData  = buildTransformedData(newSystem)
 state.transformedPoleCoords = { north:[0,90], south:[0,-90] }
   ← in the new system the poles are always at ±90°
 
-oldProj = makeProjection(type, w, h);  oldProj.rotate([oldScrollDeg,0,0])
-newProj = makeProjection(type, w, h);  newProj.rotate([0,0,0])
+seamRot = 180 - state.seamLongitude
+  ← seam is preserved through the transition; both projections use the same rotation
+
+oldProj = makeProjection(type, w, h);  oldProj.rotate([seamRot, 0, 0])
+newProj = makeProjection(type, w, h);  newProj.rotate([seamRot, 0, 0])
 
 projCache invalidated (projCache.type = null)
 
@@ -393,7 +402,7 @@ runAnim(MORPH_DURATION, d3.easeCubicInOut,
 ### 10.2 finishAnimation
 
 ```
-activeProjection = newProj (retrieved via getBaseProj)
+activeProjection = newProj (retrieved via getBaseProj, then seam rotation re-applied)
 setPhase('projected')
 replayBtn.disabled = false
 setStatus('')
@@ -439,23 +448,24 @@ const SOUTH_COLOR     = '#539eef';
 
 `renderFrame(canvas, proj, data, state, distOpts)`
 
-`distOpts` is `null` in normal mode or `{ active, distortionMap, sizeColor, shapeColor }` when distortion is on.
+`distOpts` is `null` in normal mode or `{ active, distortionMap }` when distortion is on.
 
 Draw order:
 
 1. `path(sphereFeature)` → `fill(OCEAN_COLOR)` — fills the projection boundary with ocean
-2. `path(data.land)` → `fill(distOpts?.active ? DISTORTION_COLOR_CONFIG.noDataColor : LAND_COLOR)` — in distortion mode, land gets `'#d4d4d4'` as neutral base
-3. If `distOpts.active && distortionMap.size > 0`: call `drawCountryDistortionLayer` — fills each country polygon with its bivariate color at `globalAlpha = DISTORTION_COLOR_CONFIG.countryOpacity` (0.78)
+2. `path(data.land)` → `fill(distOpts?.active ? BIVARIATE_COLOR_CONFIG.noDataColor : LAND_COLOR)` — in distortion mode, land gets the no-data color as neutral base
+3. If `distOpts.active && distortionMap.size > 0`: call `drawCountryDistortionLayer` — fills each country polygon with its bivariate color at `globalAlpha = BIVARIATE_COLOR_CONFIG.countryOpacity`
 4. `drawGraticule` — if mode is `'original'` draw `data.gratOrig` (warped); if `'redefined'` draw standard `d3.geoGraticule()()` (regular grid); `lineWidth 0.5`
 5. `path(data.countries)` → `stroke(BORDER_COLOR)` `lineWidth 0.4`
 6. `path(sphereFeature)` → `stroke(SPHERE_STROKE)` `lineWidth 1`
 7. `drawMarkers` — if `state.transformedPoleCoords` exists, draw N′ (red) and S′ (blue) circles + labels
+8. If `state.isSelectingSeam && state.candidateSeamLon != null`: call `drawSeamPreview` — draws a projected meridian at `candidateSeamLon` using `SEAM_SELECTION_STYLE`
 
 ### 11.3 renderBlend
 
 `renderBlend(canvas, projA, projB, oldData, newData, state, t)`
 
-Cross-fade from `(projA, oldData)` to `(projB, newData)` at parameter `t ∈ [0,1]`. No distortion coloring during blend.
+Cross-fade from `(projA, oldData)` to `(projB, newData)` at parameter `t ∈ [0,1]`. No distortion coloring during blend. No seam preview during blend.
 
 1. Fill sphere with ocean using `projB`
 2. `drawLayer(projA, oldData, 1-t)` — land (LAND_COLOR) + redefined graticule + countries stroke, `globalAlpha = 1-t`
@@ -474,26 +484,52 @@ const p = projection([lon, lat]);   // → [x,y] or null
 // label 'N′' or 'S′' at x+9, y (textBaseline: middle)
 ```
 
+### 11.5 drawSeamPreview
+
+Draws the candidate seam meridian during seam selection mode. Sourced from `SEAM_SELECTION_STYLE` (defined at top of `render.js`):
+
+```js
+export const SEAM_SELECTION_STYLE = {
+  lineColor:   '#111827',
+  lineOpacity: 0.8,
+  lineWidth:   2,
+  lineDash:    [6, 4],
+};
+```
+
+Implementation: draw a GeoJSON LineString `{ type:'LineString', coordinates: [[lon, -89], [lon, 89]] }` through `d3.geoPath(proj, ctx)` at the candidate longitude. Apply `globalAlpha`, `strokeStyle`, `lineWidth`, `setLineDash` from config. Reset after drawing.
+
 ---
 
 ## 12. Distortion Analysis System
 
-Lives in `src/distortion.js`. Implements country-level bivariate distortion using Tissot-style differential approximation. Distortion is measured relative to the projection's own scale distribution — the default map also shows distortion.
+Lives in `src/distortion.js`. Implements country-level bivariate distortion using Tissot-style differential approximation.
 
-### 12.1 Color configuration
+Size distortion and shape distortion are measured independently using the Tissot h/k scale factors. Normalization uses fixed global maximum values so that colors are comparable across all projections.
 
-Exported at the top of `distortion.js` for easy tuning:
+### 12.1 Color and normalization configuration
+
+All visual and normalization constants are defined at the top of `distortion.js`:
 
 ```js
-export const DISTORTION_COLOR_CONFIG = {
-  sizeColor:      '#2563eb',   // reference only — actual colors come from state
-  shapeColor:     '#dc2626',   // reference only
-  lowColor:       '#f8fafc',
-  borderColor:    '#111827',
-  countryOpacity: 0.78,        // used by drawCountryDistortionLayer
-  noDataColor:    '#d4d4d4',   // used as land base color in distortion mode
+export const BIVARIATE_COLOR_CONFIG = {
+  lowSizeLowShape:   '#ffffff',   // white  — low size, low shape
+  highSizeLowShape:  '#dc2626',   // red    — high size, low shape
+  lowSizeHighShape:  '#2563eb',   // blue   — low size, high shape
+  highSizeHighShape: '#000000',   // black  — high size AND shape
+  countryOpacity:    0.78,
+  noDataColor:       '#d4d4d4',
+  borderColor:       '#111827',
+  borderOpacity:     0.75,
+};
+
+export const DISTORTION_NORMALIZATION_CONFIG = {
+  sizeDistortionMax:  3.0,   // raw sizeRaw value that maps to full red intensity
+  shapeDistortionMax: 1.0,   // raw shapeRaw value that maps to full blue intensity
 };
 ```
+
+Do not hard-code these values inside rendering or computation functions.
 
 ### 12.2 Hex/RGB conversion
 
@@ -504,20 +540,23 @@ export function hexToRgb(hex)
 
 ### 12.3 Bivariate color interpolation
 
-`bivariateColor(s, q, sizeHex, shapeHex)` — bilinear interpolation across four corners:
+`bivariateColor(s, q)` — bilinear interpolation across the four config corners:
 
 ```
-corners:
-  (s=0, q=0) → neutral light [228, 228, 228]
-  (s=1, q=0) → sizeColor
-  (s=0, q=1) → shapeColor
-  (s=1, q=1) → average(sizeColor, shapeColor)
+corners (from BIVARIATE_COLOR_CONFIG):
+  (s=0, q=0) → lowSizeLowShape   = white  [255, 255, 255]
+  (s=1, q=0) → highSizeLowShape  = red    [220,  38,  38]
+  (s=0, q=1) → lowSizeHighShape  = blue   [ 37,  99, 235]
+  (s=1, q=1) → highSizeHighShape = black  [  0,   0,   0]
 
-r = (1-s)(1-q)·wr + s(1-q)·sr + (1-s)q·qr + sq·mr
-(same formula for g, b)
+r = (1-s)(1-q)·255 + s(1-q)·220 + (1-s)q·37  + sq·0
+g = (1-s)(1-q)·255 + s(1-q)·38  + (1-s)q·99  + sq·0
+b = (1-s)(1-q)·255 + s(1-q)·38  + (1-s)q·235 + sq·0
 
 returns [r, g, b] clamped to [0, 255]
 ```
+
+No user-facing color picker controls. Corner colors are fixed in `BIVARIATE_COLOR_CONFIG`.
 
 ### 12.4 Tissot h/k scale factors
 
@@ -535,7 +574,7 @@ k = |pE - pW| / ((lpE - lpW) · cos(fp)) ← parallel scale
 returns { h, k } or null if any projected point is NaN / out of range
 ```
 
-`lp` and `fp` are coordinates in the redefined `[λ', φ']` system (what D3 projection receives).
+`lp` and `fp` are coordinates in the redefined `[λ', φ']` system (what the D3 projection receives).
 
 ### 12.5 Country sample point precomputation
 
@@ -550,9 +589,11 @@ Sampling: grid over bounding box, `d3.geoContains` check. Countries spanning the
 
 ### 12.6 Country distortion computation
 
-`computeCountryDistortions(originalCountries, countrySamples, projection, coordinateSystem)`
+`computeCountryDistortions(originalCountries, countrySamples, distortionProjection, coordinateSystem)`
 
 Returns `Map<id, {sizeNorm, shapeNorm}>` with values in [0, 1].
+
+The `distortionProjection` argument must be a seam-neutral projection — always `makeProjection(type, w, h)` with no additional rotation (see §12.9). This ensures that sample points near the user-chosen seam are not clipped and produce valid h/k values.
 
 **First pass** — collect h/k at every sample point across all countries:
 
@@ -560,7 +601,7 @@ Returns `Map<id, {sizeNorm, shapeNorm}>` with values in [0, 1].
 for each feature:
   for each [lon, lat] in countrySamples.get(feature.id):
     [lp, fp] = transformPoint(lon, lat, coordinateSystem)
-    hk = computeHK(projection, lp, fp)
+    hk = computeHK(distortionProjection, lp, fp)
     if hk: store hk for this country; push hk.h * hk.k to global allHK array
 
 medianHK = median(allHK)   ← global reference for size
@@ -575,16 +616,16 @@ for each country:
   shapeRaw = mean( |log(max(h,k) / min(h,k))| ) across sample points
 ```
 
-`sizeRaw` uses global median as reference so the distortion reflects each country's deviation from the projection's typical area scale (not from a perfectly equal-area sphere projection). `shapeRaw` is the average log-eccentricity of the Tissot ellipse (0 = locally conformal).
+`sizeRaw` uses the global median as reference so the value reflects each country's deviation from the projection's typical area scale. `shapeRaw` is the average log-eccentricity of the Tissot ellipse (0 = locally conformal). These two metrics are independent: `sizeRaw` captures h·k (area element), `shapeRaw` captures h/k (anisotropy), so neither contaminates the other.
 
-**Normalization** — 95th-percentile clamping to prevent outliers from dominating:
+**Normalization** — fixed global maximum clamping:
 
 ```
-size95  = percentile(all sizeRaw values, 0.95)
-shape95 = percentile(all shapeRaw values, 0.95)
-sizeNorm  = min(1, sizeRaw / size95)
-shapeNorm = min(1, shapeRaw / shape95)
+sizeNorm  = clamp(sizeRaw  / DISTORTION_NORMALIZATION_CONFIG.sizeDistortionMax,  0, 1)
+shapeNorm = clamp(shapeRaw / DISTORTION_NORMALIZATION_CONFIG.shapeDistortionMax, 0, 1)
 ```
+
+This ensures the same color intensity always means the same raw distortion amount, regardless of which projection is displayed. Switching projections changes country colors but not the color scale.
 
 Countries with no valid sample points get `{ sizeNorm: 0, shapeNorm: 0 }`.
 
@@ -632,7 +673,12 @@ handleDistortionToggle():
 ```
 computeDistortionMap():
   if missing: countrySamples / activeProjection / coordinateSystem / data → return
-  state.distortionMap = computeCountryDistortions(...)
+  distortionProj = makeProjection(state.projType, canvasW, canvasH)
+    ← always use seam-neutral projection (no rotate); see §12.9
+  state.distortionMap = computeCountryDistortions(
+    state.data.countries, state.countrySamples,
+    distortionProj, state.coordinateSystem
+  )
   updateLegend()
   draw()
 ```
@@ -640,9 +686,10 @@ computeDistortionMap():
 **Legend update:**
 ```
 updateLegend():
-  paint #legend-canvas (120×120) with bivariateColor grid, CELL=2px
-  set #legend-swatch-size.style.background  = state.sizeColor
-  set #legend-swatch-shape.style.background = state.shapeColor
+  paint #legend-canvas (120×120) with bivariateColor grid using BIVARIATE_COLOR_CONFIG corners, CELL=2px
+    ← x-axis = size (left=0, right=1), y-axis = shape (top=1, bottom=0, canvas y inverted)
+  set #legend-swatch-size.style.background  = BIVARIATE_COLOR_CONFIG.highSizeLowShape
+  set #legend-swatch-shape.style.background = BIVARIATE_COLOR_CONFIG.lowSizeHighShape
 ```
 
 **UI state:**
@@ -673,11 +720,32 @@ handleDistortionPreset(key):
 **Recompute triggers** — `state.distortionMap` is set to `null` and `computeDistortionMap()` is called when:
 - Animation finishes (`finishAnimation`)
 - Projection type changes (`handleProjectionChange`)
+- Seam changes (`handleSeamConfirm`) — distortion is recomputed even though the distortion projection is seam-neutral; recompute is triggered for consistency, and the render uses the new seam for display
 - Reset (`handleReset` — also clears distortionMap; recomputes only if distortionMode is on)
 
-**Color input changes** call `updateLegend(); draw()` immediately if `state.distortionMode` is true.
-
 **Bootstrap** — `precomputeCountrySamples(state.data.countries)` is called once after data loads and stored in `state.countrySamples`.
+
+### 12.9 Seam-Independent Distortion Projection
+
+Country distortion values must not change when the user moves the seam. The seam is a visual display cut — it should not affect measured size or shape distortion.
+
+**Rule:** `computeDistortionMap` always passes a **seam-neutral projection** to `computeCountryDistortions`:
+
+```js
+const distortionProj = makeProjection(state.projType, canvasW, canvasH);
+// No rotate() call — leaves the projection at rotate([0,0,0])
+// This keeps the seam at the antimeridian (180°) for all distortion calculations
+```
+
+The render projection (`activeProjection`) separately uses `proj.rotate([180 - state.seamLongitude, 0, 0])` for display. These two projections are independent.
+
+**Country color consistency:** Because distortion is computed per country ID from full geometry (not from screen-rendered or seam-clipped geometry), countries split by the visible seam receive a single distortion color applied to all their rendered fragments.
+
+```
+distortion value = computed once per feature.id
+render = drawn with activeProjection (which may visually split country at seam)
+color applied = same BIVARIATE_COLOR_CONFIG color to all fragments of the same country
+```
 
 ---
 
@@ -693,7 +761,7 @@ handleDistortionPreset(key):
 
 ### Toggle
 
-Segmented control in right panel. Clicking `#grat-redefined` or `#grat-original` updates `state.graticuleMode` and redraws immediately. Both buttons reference `GRATICULE_COLOR` / `GRATICULE_ORIG` (both `'#434343'` in current code).
+Segmented control in right panel. Clicking `#grat-redefined` or `#grat-original` updates `state.graticuleMode` and redraws immediately.
 
 ---
 
@@ -709,22 +777,89 @@ Segmented control in right panel. Clicking `#grat-redefined` or `#grat-original`
 
 Constants:
 ```js
-const GLOBE_SENSITIVITY    = 0.3;  // degrees per CSS pixel (for globe drag — unused in current app)
 const DRAG_MOVED_THRESHOLD = 4;    // px — below this, mouseup counts as a click
 ```
 
 Registered events:
 - `mousedown` on canvas — record start position
-- `mousemove` on canvas — dispatch drag if moved > threshold
-- `mouseup` on window — on click: `onPoleClick(geo.lon, geo.lat)`
-- `wheel` on canvas (passive:false) — `onMapScrollDelta(deltaX || deltaY)`
+- `mousemove` on canvas — dispatch to `handleMouseMove`
+- `mouseup` on window — on click: route to pole click or seam confirm depending on mode
 - `touchstart` / `touchmove` / `touchend` on canvas
 
-A click (mouse or touch) when `phase === 'projected'` calls `onPoleClick` using `proj.invert([x,y])`.
+There is **no** wheel or drag handler for map scrolling. Horizontal drag does nothing to the map.
 
-Drag when `phase === 'projected'` calls `onMapScrollDelta(dx)` for horizontal seam shifting.
+### 15.1 Normal mode (phase === 'projected', !isSelectingSeam)
 
-Canvas coordinates are DPI-corrected: `(clientX - rect.left) * (canvas.width / rect.width)`.
+A click (mouse or touch) calls `onPoleClick(geo.lon, geo.lat)` using `proj.invert([x,y])`.
+
+### 15.2 Seam selection mode (isSelectingSeam === true)
+
+When `state.isSelectingSeam` is true:
+
+**Mouse move:**
+```
+geo = proj.invert([mouseX, mouseY])
+if geo is valid:
+  state.candidateSeamLon = geo[0]   ← λ' in unrotated frame
+  draw()   ← redraws frame + seam preview line
+```
+If `proj.invert` returns null or NaN, keep the previous `candidateSeamLon` and do not redraw.
+
+**Click (mouseup / touchend):**
+```
+if state.candidateSeamLon != null:
+  onSeamConfirm(state.candidateSeamLon)
+```
+
+`onSeamConfirm(lon)` in main.js:
+```
+state.seamLongitude = lon
+state.isSelectingSeam = false
+state.candidateSeamLon = null
+updateSeamUI()    ← update button label, seam display text
+redrawProjected()
+if state.distortionMode:
+  state.distortionMap = null
+  computeDistortionMap()
+```
+
+**Canvas coordinate correction** (applies to all events):
+```
+mouseX = (clientX - rect.left) * (canvas.width / rect.width)
+mouseY = (clientY - rect.top)  * (canvas.height / rect.height)
+```
+
+### 15.3 Seam button click
+
+`handleSeamBtnClick()` in main.js:
+```
+if state.isSelectingSeam:
+  // cancel seam selection
+  state.isSelectingSeam = false
+  state.candidateSeamLon = null
+  updateSeamUI()
+  draw()   ← remove preview line
+else:
+  state.isSelectingSeam = true
+  updateSeamUI()
+  draw()   ← show preview line immediately if candidateSeamLon is set
+```
+
+`updateSeamUI()`:
+```
+#seam-btn text = isSelectingSeam ? 'Click Map to Set Seam' : 'Change Seam'
+#seam-btn class active-toggle = isSelectingSeam
+#seam-display text = 'Current seam: ' + formatSeamLon(state.seamLongitude)
+seam group visibility = isSeamApplicable(state.projType)
+```
+
+`formatSeamLon(lon)`:
+```
+if lon == 180 or lon == -180 → '180°'
+if lon > 0 → lon.toFixed(1) + '°E'
+if lon < 0 → (-lon).toFixed(1) + '°W'
+if lon == 0 → '0°'
+```
 
 ---
 
@@ -829,16 +964,18 @@ Rendered at `x=120, y=288, font-size=11, fill=#888`.
 **Reset** restores:
 - `customPole = null`, `derivedPole = null`
 - `coordinateSystem = DEFAULT_SYSTEM`
-- `scrollDeg = 0`
+- `seamLongitude = 180`
+- `isSelectingSeam = false`, `candidateSeamLon = null`
 - `graticuleMode = 'redefined'`
 - `transformedPoleCoords = null`
 - `distortionMap = null`
 - Rebuilds `transformedData` from `DEFAULT_SYSTEM`
 - `replayBtn.disabled = true`
 - Projection type and `distortionMode` **unchanged**
+- Calls `updateSeamUI()` to reflect reset seam
 - If `distortionMode` is on, calls `computeDistortionMap()` after reset
 
-**Replay** re-runs the full transition animation starting from the default frame for the currently stored `customPole`. It resets `coordinateSystem` to `DEFAULT_SYSTEM` and `transformedData` to the default frame, then calls `runTransitionAnimation` after 180 ms.
+**Replay** re-runs the full transition animation starting from the default frame for the currently stored `customPole`. It resets `coordinateSystem` to `DEFAULT_SYSTEM` and `transformedData` to the default frame, then calls `runTransitionAnimation` after 180 ms. The current `seamLongitude` is preserved during replay.
 
 ---
 
@@ -849,19 +986,21 @@ index.html            — single HTML page; import map; all DOM
 styles/
   style.css           — all styling; no framework
 src/
-  main.js             — app bootstrap, state, event wiring, distortion UI
+  main.js             — app bootstrap, state, event wiring, distortion UI, seam UI
   data.js             — TopoJSON loader with local/CDN fallback
   utils.js            — antipodal(), formatCoord(), clampLat(), normalizeLon()
   transform.js        — sphere math: buildCoordinateSystem, transformPoint,
                         inverseTransformPoint, transformGeoJSON
-  projection.js       — makeProjection(type,w,h), isCylindrical(), CYLINDRICAL_TYPES
-  render.js           — renderFrame, renderBlend, resizeCanvas
+  projection.js       — makeProjection(type,w,h), isSeamApplicable(), SEAM_TYPES
+  render.js           — renderFrame, renderBlend, resizeCanvas, drawSeamPreview,
+                        SEAM_SELECTION_STYLE
   animation.js        — runAnim, MORPH_DURATION, ROTATION_DURATION
-  interaction.js      — setupInteraction (mouse/touch/wheel)
+  interaction.js      — setupInteraction (mouse/touch; no scroll)
   diagram.js          — renderDiagram (dynamic SVG left-panel diagram)
-  distortion.js       — DISTORTION_COLOR_CONFIG, bivariateColor, hexToRgb,
-                        computeHK, precomputeCountrySamples,
-                        computeCountryDistortions, searchDistortionPreset
+  distortion.js       — BIVARIATE_COLOR_CONFIG, DISTORTION_NORMALIZATION_CONFIG,
+                        bivariateColor, hexToRgb, computeHK,
+                        precomputeCountrySamples, computeCountryDistortions,
+                        searchDistortionPreset
 data/
   countries-110m.json — Natural Earth 110m TopoJSON (optional local copy)
 ```
@@ -898,12 +1037,12 @@ Canvas background (visualization column): `#e8e8e8`.
 
 Loading overlay: `background:#e8e8e8`, fades out with `opacity:0; pointer-events:none` via `.fade-out`, then `display:none` after 600 ms.
 
-Instruction / scroll-hint overlays: `background:rgba(255,255,255,0.92); border-radius:6px; font-size:13px; white-space:nowrap`. Instruction hides with `opacity:0` via `.hidden`; scroll-hint shows with `opacity:1` via `.visible`.
+Instruction overlay: `background:rgba(255,255,255,0.92); border-radius:6px; font-size:13px; white-space:nowrap`. Hides with `opacity:0` via `.hidden`.
 
 ### 20.1 Distortion UI styles
 
 ```css
-/* Toggle button active state */
+/* Toggle button and seam-btn active state */
 .active-toggle {
   background: #1a6cc0;
   color: #ffffff;
@@ -917,23 +1056,6 @@ Instruction / scroll-hint overlays: `background:rgba(255,255,255,0.92); border-r
 
 /* Hides controls and legend section when distortion mode is off */
 .distortion-hidden { display: none; }
-
-/* Color picker rows */
-#distortion-color-controls {
-  display: flex; flex-direction: column; gap: 8px; margin-top: 6px;
-}
-.color-row { display: flex; align-items: center; gap: 10px; }
-.color-label {
-  font-size: 11px; font-weight: 700; color: #888;
-  text-transform: uppercase; letter-spacing: 0.07em;
-  width: 36px; flex-shrink: 0;
-}
-.color-desc { font-size: 12px; color: #777; }
-input[type="color"] {
-  width: 36px; height: 28px;
-  border: 1.5px solid #d8d8d8; border-radius: 5px;
-  padding: 2px; background: #f8f8f8; flex-shrink: 0;
-}
 
 /* Preset buttons */
 .preset-btn { font-size: 13px; padding: 9px 12px; }
@@ -950,6 +1072,26 @@ input[type="color"] {
   border-radius: 2px; border: 1px solid #ccc; flex-shrink: 0;
 }
 .legend-swatch-label { font-size: 11px; color: #666; }
+.legend-numeric-row {
+  display: flex; justify-content: space-between; width: 120px;
+  font-size: 9px; color: #aaa; margin-top: 2px;
+}
+```
+
+### 20.2 Seam UI styles
+
+```css
+/* Seam group — hidden for azimuthal projections */
+#seam-group { display: flex; flex-direction: column; gap: 8px; }
+#seam-group.seam-hidden { display: none; }
+
+/* Seam info display */
+#seam-display {
+  font-size: 13px; color: #555;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Seam button uses same base button styles + active-toggle when selecting */
 ```
 
 ---
@@ -957,9 +1099,18 @@ input[type="color"] {
 ## 21. Phase and Canvas Cursor
 
 ```
-phase = 'projected'  → canvas class 'state-projected',  cursor: crosshair
-phase = 'animating'  → canvas class 'state-animating',  cursor: default, pointer-events: none
+phase = 'projected', !isSelectingSeam → canvas class 'state-projected',  cursor: crosshair
+phase = 'projected', isSelectingSeam  → canvas class 'state-seam-selecting', cursor: col-resize
+phase = 'animating'                   → canvas class 'state-animating',  cursor: default, pointer-events: none
 ```
+
+```css
+#map-canvas.state-projected      { cursor: crosshair; }
+#map-canvas.state-seam-selecting { cursor: col-resize; }
+#map-canvas.state-animating      { cursor: default; pointer-events: none; }
+```
+
+Canvas class is updated by `setPhase()` and by `updateSeamUI()` (which sets/removes `state-seam-selecting`).
 
 ---
 
@@ -993,21 +1144,40 @@ After selecting `[30°, 45°]` as new north pole with Equirectangular:
 - Redefined graticule appears as normal horizontal/vertical grid.
 - Original graticule appears curved.
 
-### 22.5 Scroll test
+### 22.5 Seam test
 
-After selecting a custom pole with a cylindrical projection, horizontal scroll/drag shifts `state.scrollDeg` and calls `proj.rotate([scrollDeg,0,0])`. The seam shifts but the pole axis remains the map's top/bottom anchor. The original north pole does **not** return to the top edge during scrolling.
+After selecting a custom pole with a cylindrical projection:
+- Default seam is at 180° (antimeridian); no horizontal drag or scroll shifts the map.
+- Clicking "Change Seam" enters seam selection mode; cursor changes to `col-resize`.
+- Moving the cursor shows a dashed vertical meridian line following the cursor longitude.
+- Clicking the map sets a new seam; the map redraws with the new seam; distortion is recomputed if distortion mode is active.
+- Changing the seam does NOT change any country's distortion color (distortion is seam-independent).
+- Countries visually split by the seam show the same fill color on both fragments.
 
 ### 22.6 Replay test
 
-After replay, the animation starts from the default map and morphs to the same custom-pole map as after the original click.
+After replay, the animation starts from the default map and morphs to the same custom-pole map as after the original click. The seam position is preserved during replay.
 
 ### 22.7 Distortion mode test
 
 - On first click of "Show Distortion Compare": `computeDistortionMap` runs, `state.distortionMap` is populated, every country polygon gets a bivariate fill color.
-- Default map (no custom pole, equirectangular) should show non-zero distortion values.
+- Default map (no custom pole, equirectangular) shows non-zero distortion values.
 - "Hide" then "Show" again: `state.distortionMap` is still set, `draw()` is called directly without recomputing.
 - After a pole change or projection change: `state.distortionMap` is reset to `null` and recomputed.
-- Legend canvas shows a bivariate color gradient matching `state.sizeColor` and `state.shapeColor`.
+- Legend canvas shows a bivariate color gradient: bottom-left white, bottom-right red, top-left blue, top-right black. Legend does not change when switching projections.
+
+### 22.8 Cross-projection distortion comparison
+
+- Mercator: high-latitude countries show high size distortion (red tint) but low shape distortion (not blue). Countries near the equator show low distortion (near white).
+- Gall-Peters: most countries show low size distortion (not red) but high shape distortion (blue tint). High both = dark.
+- Cylindrical Equal-Area / Mollweide: low size distortion (near-zero red component), shape distortion present.
+- Switching between Mercator and Gall-Peters changes country colors but the legend gradient and axis max values remain fixed.
+
+### 22.9 Global normalization test
+
+A country with `sizeRaw = 3.0` gets `sizeNorm = 1.0` (full red channel).
+A country with `sizeRaw = 1.5` gets `sizeNorm = 0.5` (half red channel).
+These values are the same in every projection.
 
 ---
 
@@ -1034,4 +1204,5 @@ Not implemented:
 - Per-projection standard-parallel controls
 - Web Worker offloading for distortion computation
 - High-resolution distortion sampling during interaction
-- Polygon-overlap shape comparison (only differential Tissot approximation is used)
+- Polygon-overlap / IoU-based shape comparison (Tissot differential approximation is used instead)
+- Horizontal map scrolling (replaced by explicit seam selection)
